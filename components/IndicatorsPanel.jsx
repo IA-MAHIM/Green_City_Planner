@@ -4,10 +4,12 @@ import { fetchWeather, fetchAirQuality, fetchFiresNear } from '@/lib/dataProvide
 function aqiFromPm25(pm) {
   const br = [
     [0.0, 12.0, 0, 50], [12.1, 35.4, 51, 100], [35.5, 55.4, 101, 150],
-    [55.5, 150.4, 151, 200], [150.5, 250.4, 201, 300], [250.5, 350.4, 301, 400], [350.5, 500.4, 401, 500]
+    [55.5, 150.4, 151, 200], [150.5, 250.4, 201, 300],
+    [250.5, 350.4, 301, 400], [350.5, 500.4, 401, 500],
   ];
   for (const [cl, ch, al, ah] of br) {
-    if (pm >= cl && pm <= ch) return Math.round(((ah - al) / (ch - cl)) * (pm - cl) + al);
+    if (pm >= cl && pm <= ch)
+      return Math.round(((ah - al) / (ch - cl)) * (pm - cl) + al);
   }
   return 500;
 }
@@ -21,7 +23,7 @@ function riskBadge(level) {
   );
 }
 
-export default function IndicatorsPanel({ city, hideTop = false, compact = false }) {
+export default function IndicatorsPanel({ city, hideTop = false, compact = false, onData }) {
   const [weather, setWeather] = useState(null);
   const [aq, setAq] = useState(null);
   const [fires, setFires] = useState([]);
@@ -29,7 +31,7 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
   const [show, setShow] = useState({
     air: true, rain: true, flood: true, fire: true,
     temp: true, humidity: true, wind: true,
-    land: true, drought: true, water: true
+    land: true, drought: true, water: true,
   });
 
   const lat = city?.lat, lng = city?.lng;
@@ -41,14 +43,55 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
         const [w, a, f] = await Promise.all([
           fetchWeather(lat, lng),
           fetchAirQuality(lat, lng),
-          fetchFiresNear(lat, lng)
+          fetchFiresNear(lat, lng),
         ]);
         setWeather(w);
         setAq(a);
         setFires(f);
-      } catch (e) { console.error(e); }
+
+        // ✅ forward metrics to Solution
+        if (onData) {
+          const idx = w?.hourly?.time?.length ? w.hourly.time.length - 1 : -1;
+          const t = idx >= 0 ? w?.hourly?.temperature_2m?.[idx] : null;
+          const rh = idx >= 0 ? w?.hourly?.relative_humidity_2m?.[idx] : null;
+          const wind = idx >= 0 ? w?.hourly?.wind_speed_10m?.[idx] : null;
+          const gusts = idx >= 0 ? w?.hourly?.wind_gusts_10m?.[idx] : null;
+
+          const pm25 = a?.pm2_5;
+          const aqi = pm25 != null ? aqiFromPm25(pm25) : null;
+
+          const last24hPrecip = (() => {
+            const arr = w?.hourly?.precipitation || [];
+            if (!arr.length) return null;
+            const last = arr.slice(Math.max(0, arr.length - 24));
+            return Number(last.reduce((x, y) => x + (y || 0), 0).toFixed(2));
+          })();
+
+          const rain7d = (() => {
+            const arr = w?.hourly?.precipitation || [];
+            if (!arr.length) return null;
+            const last = arr.slice(Math.max(0, arr.length - 24 * 7));
+            return Number(last.reduce((x, y) => x + (y || 0), 0).toFixed(1));
+          })();
+
+          onData({
+            aqi, pm25,
+            no2: a?.nitrogen_dioxide, o3: a?.ozone,
+            temp: t, rh,
+            rain1h: w?.hourly?.precipitation?.[idx] ?? null,
+            rain24h: last24hPrecip,
+            floodIntensity3h: null, // compute if needed
+            fireEvents: f?.length ?? 0,
+            vpd: t != null && rh != null ? (1 - rh / 100) * 3.2 : null,
+            rain7d,
+            windSpeedMs: wind, windGustMs: gusts,
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      }
     })();
-  }, [lat, lng]);
+  }, [lat, lng, onData]);
 
   const last24hPrecip = useMemo(() => {
     const arr = weather?.hourly?.precipitation || [];
@@ -77,7 +120,9 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
     return arr[arr.length - 1];
   })();
 
-  const floodLevel = last24hPrecip != null ? (last24hPrecip > 50 ? 'High' : last24hPrecip > 20 ? 'Moderate' : 'Low') : 'Unknown';
+  const floodLevel = last24hPrecip != null
+    ? (last24hPrecip > 50 ? 'High' : last24hPrecip > 20 ? 'Moderate' : 'Low')
+    : 'Unknown';
 
   const threeHourIntensity = (() => {
     const arr = weather?.hourly?.precipitation || [];
@@ -104,8 +149,7 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
   })();
 
   function toggle(key) { setShow(s => ({ ...s, [key]: !s[key] })); }
-
-  const sectionGap = compact ? 8 : 12;  // tighter gaps
+  const sectionGap = compact ? 8 : 12;
 
   return (
     <div className="content-wrap" style={{ justifyContent: 'center' }}>
@@ -118,7 +162,6 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
           </div>
         )}
 
-        {/* Switches (UPPERCASE labels) */}
         <div className="card" style={{ marginTop: 10 }}>
           <div className="switches">
             <label className="switch"><input type="checkbox" checked={show.air} onChange={() => toggle('air')} /> <span>AIR</span></label>
@@ -134,7 +177,6 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
           </div>
         </div>
 
-        {/* Sections with reduced gaps */}
         {show.air && (
           <div className="card" style={{ marginTop: sectionGap }}>
             <h3>Air Quality</h3>
