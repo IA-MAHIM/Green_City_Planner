@@ -1,105 +1,116 @@
 // utils/indicators.js
+// Centralized classification logic
+
 export const COLORS = {
-  low:   '#16a34a', // green
-  medium:'#eab308', // yellow
-  high:  '#dc2626', // red
-  na:    '#9ca3af', // gray
+  low: "#16a34a",     // green
+  medium: "#ca8a04",  // amber
+  high: "#b91c1c",    // red
+  na: "#6b7280",      // gray
 };
 
-const asNumber = (x) => {
-  const n = typeof x === 'string' ? parseFloat(x) : x;
-  return Number.isFinite(n) ? n : null;
-};
+// Wraps return in { level, color, label }
+function wrap(level) {
+  if (!level) return { level: "na", color: COLORS.na, label: "Unknown" };
+  return { level, color: COLORS[level], label: level.charAt(0).toUpperCase() + level.slice(1) };
+}
 
-const badge = (label, level) => ({ label, level, color: COLORS[level] ?? COLORS.na });
-
-// --- Air Quality (US AQI-ish buckets) ---
+// -------------------------
+// AIR QUALITY (CPCB/US EPA)
+// -------------------------
 export function aqiLevel(aqi) {
-  const v = asNumber(aqi);
-  if (v === null) return badge('N/A', 'na');
-  if (v <= 50)  return badge('Low', 'low');
-  if (v <= 150) return badge('Medium', 'medium');
-  return badge('High', 'high');
+  if (aqi == null || isNaN(aqi)) return wrap("na");
+  if (aqi <= 50) return wrap("low");
+  if (aqi <= 150) return wrap("medium");
+  return wrap("high");
 }
 
-// --- Temperature (°C) ---
-export function temperatureLevel(c) {
-  const t = asNumber(c);
-  if (t === null) return badge('N/A', 'na');
-  if (t < 15)   return badge('Low', 'low');
-  if (t <= 30)  return badge('Medium', 'medium');
-  return badge('High', 'high'); // 31°C => High
+// -------------------------
+// TEMPERATURE (°C)
+// -------------------------
+export function temperatureLevel(tempC) {
+  if (tempC == null || isNaN(tempC)) return wrap("na");
+  if (tempC <= 24) return wrap("low");
+  if (tempC <= 34) return wrap("medium");
+  return wrap("high");
 }
 
-// --- Humidity & Mold (relative humidity %) ---
+// -------------------------
+// HUMIDITY (%)
+// -------------------------
 export function humidityLevel(rh) {
-  const v = asNumber(rh);
-  if (v === null) return badge('N/A', 'na');
-  if (v < 30)     return badge('Low', 'low');
-  if (v <= 60)    return badge('Medium', 'medium'); // 39% => Medium
-  return badge('High', 'high'); // >60–70% begins mold risk
+  if (rh == null || isNaN(rh)) return wrap("na");
+  if (rh < 60) return wrap("low");       // comfortable
+  if (rh < 80) return wrap("medium");    // slightly humid
+  return wrap("high");                   // very humid → mold risk
 }
 
-// --- Rain (mm / mm/h) ---
-export function rainLevel(last24h, last1h) {
-  const d = asNumber(last24h) ?? 0;
-  const h = asNumber(last1h) ?? 0;
-  if (d >= 50 || h >= 20) return badge('High', 'high');
-  if (d >= 10 || h >= 5)  return badge('Medium', 'medium');
-  return badge('Low', 'low'); // 0/0 => Low
-}
-
-// --- Flood (uses intensity + totals) ---
-export function floodLevel(dailyMm, intensity3h) {
-  const d = asNumber(dailyMm) ?? 0;
-  const i = asNumber(intensity3h) ?? 0;
-  if (i >= 20 || d >= 100) return badge('High', 'high');
-  if (i >= 5  || d >= 30)  return badge('Medium', 'medium');
-  return badge('Low', 'low');
-}
-
-// --- Fire (events + dryness) ---
-export function fireLevel(activeEvents, rh, vpd) {
-  const a = asNumber(activeEvents) ?? 0;
-  const R = asNumber(rh);
-  const V = asNumber(vpd);
-  if (a > 0 || (V >= 2.5 && R !== null && R < 30)) return badge('High', 'high');
-  if ((V !== null && V >= 1.5 && R !== null && R < 40)) return badge('Medium', 'medium');
-  return badge('Low', 'low'); // your case: 0 events, RH 39, VPD 1.95 => Low
-}
-
-// --- Wind & Comfort (m/s), gusts can bump one level ---
+// -------------------------
+// WIND (m/s)
+// -------------------------
 export function windLevel(speed, gust) {
-  const s = asNumber(speed) ?? 0;
-  const g = asNumber(gust) ?? 0;
-  let level = 'low';
-  if (s > 8) level = 'high';
-  else if (s >= 4) level = 'medium';
-  if (g > 12 && level === 'medium') level = 'high';
-  return badge(level === 'low' ? 'Low' : level === 'medium' ? 'Medium' : 'High', level);
+  const v = Math.max(speed || 0, gust || 0);
+  if (v < 4) return wrap("low");
+  if (v < 10) return wrap("medium");
+  return wrap("high");
 }
 
-// --- Land Health (simple proxy using VPD + recent rain) ---
+// -------------------------
+// RAIN (mm)
+// -------------------------
+export function rainLevel(rain24h, rain1h) {
+  const r = Math.max(rain24h || 0, rain1h || 0);
+  if (r <= 20) return wrap("low");
+  if (r <= 80) return wrap("medium");
+  return wrap("high");
+}
+
+// -------------------------
+// FLOOD (% risk OR rain + intensity)
+// -------------------------
+export function floodLevel(rain24h, intensity3h) {
+  const r = Math.max(rain24h || 0, intensity3h || 0);
+  if (r <= 30) return wrap("low");
+  if (r <= 60) return wrap("medium");
+  return wrap("high");
+}
+
+// -------------------------
+// FIRE (events + dryness + VPD)
+// -------------------------
+export function fireLevel(events, rh, vpd) {
+  if (events > 10 || (vpd > 2 && rh < 40)) return wrap("high");
+  if (events > 3 || (vpd > 1 && rh < 60)) return wrap("medium");
+  return wrap("low");
+}
+
+// -------------------------
+// LAND HEALTH (VPD + 7d rain)
+// -------------------------
 export function landHealthLevel(vpd, rain7d) {
-  const V = asNumber(vpd) ?? 0;
-  const R7 = asNumber(rain7d) ?? 0;
-  if (V >= 2.5 && R7 === 0) return badge('High', 'high');
-  if (V >= 1.5 || R7 < 5)   return badge('Medium', 'medium'); // your case => Medium
-  return badge('Low', 'low');
+  if (vpd == null || rain7d == null) return wrap("na");
+  if (vpd < 1.5 && rain7d > 10) return wrap("low");
+  if (vpd < 2.5 && rain7d > 3) return wrap("medium");
+  return wrap("high");
 }
 
-// --- Drought (recent rain + VPD) ---
+// -------------------------
+// DROUGHT (7d rain + VPD)
+// -------------------------
 export function droughtLevel(rain7d, vpd) {
-  const R7 = asNumber(rain7d) ?? 0;
-  const V = asNumber(vpd) ?? 0;
-  if (R7 === 0 && V >= 2.5) return badge('High', 'high');
-  if (R7 === 0 && V >= 1.5) return badge('Medium', 'medium'); // your case => Medium
-  if (R7 < 5)               return badge('Medium', 'medium');
-  return badge('Low', 'low');
+  if (rain7d == null || vpd == null) return wrap("na");
+  if (rain7d > 20) return wrap("low");
+  if (rain7d > 5) return wrap("medium");
+  return wrap("high");
 }
 
-// --- Water Level (if all sources N/A) ---
+// -------------------------
+// WATER LEVEL (sources)
+// -------------------------
 export function waterLevelStatus({ river, tide, reservoir }) {
-  const any = [river, tide, reservoir].some(v => v !== null && v !== 'N/A' && v !== undefined);
-  return any ? badge('OK', 'low') : { label: 'Unknown', level: 'na', color: COLORS.na };
+  const vals = [river, tide, reservoir].map(v => (typeof v === "number" ? v : null));
+  const v = vals.find(x => x != null);
+  if (v == null) return wrap("na");
+  if (v < 30) return wrap("low");
+  if (v < 70) return wrap("medium");
+  return wrap("high");
 }
