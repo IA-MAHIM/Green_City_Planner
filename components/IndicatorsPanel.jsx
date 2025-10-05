@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchWeather, fetchAirQuality, fetchFiresNear } from '@/lib/dataProviders';
+// ✅ NEW: use the real water level provider
+import { fetchWaterLevel } from '@/lib/dataProviders';
 
 function aqiFromPm25(pm) {
   const br = [
@@ -27,6 +29,8 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
   const [weather, setWeather] = useState(null);
   const [aq, setAq] = useState(null);
   const [fires, setFires] = useState([]);
+  // ✅ NEW: water state
+  const [water, setWater] = useState(null);
 
   const [show, setShow] = useState({
     air: true, rain: true, flood: true, fire: true,
@@ -40,14 +44,18 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
     if (!lat || !lng) return;
     (async () => {
       try {
-        const [w, a, f] = await Promise.all([
+        const [w, a, f, wl] = await Promise.all([
           fetchWeather(lat, lng),
           fetchAirQuality(lat, lng),
           fetchFiresNear(lat, lng),
+          // ✅ NEW: get water level in parallel (no extra UI delay)
+          fetchWaterLevel(lat, lng),
         ]);
         setWeather(w);
         setAq(a);
         setFires(f);
+        // ✅ NEW
+        setWater(wl);
 
         // ✅ forward metrics to Solution
         if (onData) {
@@ -85,6 +93,10 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
             vpd: t != null && rh != null ? (1 - rh / 100) * 3.2 : null,
             rain7d,
             windSpeedMs: wind, windGustMs: gusts,
+            // ✅ NEW: water signals for Solutions
+            waterIndexPct: wl?.indexPct ?? null,
+            waterLevelLabel: wl?.level ?? null,
+            waterPrecip24h: wl?.precip24h ?? null,
           });
         }
       } catch (e) {
@@ -281,9 +293,10 @@ export default function IndicatorsPanel({ city, hideTop = false, compact = false
           <div className="card" style={{ marginTop: sectionGap }}>
             <h3>Water Level</h3>
             <div className="grid-3">
-              <div className="kpi"><div>River gauge</div><div><b>N/A</b></div></div>
-              <div className="kpi"><div>Tide/Coast</div><div><b>N/A</b></div></div>
-              <div className="kpi"><div>Reservoir</div><div><b>N/A</b></div></div>
+              {/* Keep your labels, fill with live numbers */}
+              <div className="kpi"><div>River gauge</div><div><b>{(water?.indexPct != null) ? `${water.indexPct}%` : 'N/A'}</b></div></div>
+              <div className="kpi"><div>Tide/Coast</div><div><b>{(water?.precip24h != null) ? `${water.precip24h} mm/24h` : 'N/A'}</b></div></div>
+              <div className="kpi"><div>Reservoir</div><div><b>{(water?.soilTop != null) ? `${Math.round((water.soilTop)*100)}%` : 'N/A'}</b></div></div>
             </div>
           </div>
         )}
