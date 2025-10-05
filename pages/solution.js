@@ -86,6 +86,10 @@ export default function Solution() {
     lat: null,
     lng: null,
     city: "",
+    // ✅ NEW: water signals forwarded from IndicatorsPanel
+    waterIndexPct: null,
+    waterLevelLabel: null,
+    waterPrecip24h: null,
   });
 
   // reflect city on mount
@@ -103,6 +107,26 @@ export default function Solution() {
     setLive((prev) => ({ ...prev, ...vals }));
   };
 
+  // ✅ NEW: turn live water into an indicators-like info object
+  function waterInfoFromLive() {
+    // Prefer explicit label if provided by provider
+    const label = (live.waterLevelLabel || '').toLowerCase();
+    const pct = asNum(live.waterIndexPct);
+    let level;
+    if (label === 'low' || label === 'moderate' || label === 'high') {
+      level = label === 'moderate' ? 'medium' : label; // normalize
+    } else if (pct != null) {
+      // thresholds aligned with provider (30/45%)
+      if (pct >= 45) level = 'high';
+      else if (pct >= 30) level = 'medium';
+      else level = 'low';
+    } else {
+      return waterLevelStatus() || UNKNOWN_INFO;
+    }
+    const color = level === 'low' ? COLORS.low : level === 'medium' ? COLORS.medium : COLORS.high;
+    return { label: level, level, color };
+  }
+
   // Compute raw bands from current live (no /api/live dependency)
   const rawBands = useMemo(() => {
     return {
@@ -119,9 +143,10 @@ export default function Solution() {
       windInfo: windLevel(asNum(live.windSpeedMs), asNum(live.windGustMs)) || UNKNOWN_INFO,
       landInfo: landHealthLevel(asNum(live.vpd), asNum(live.rain7d)) || UNKNOWN_INFO,
       droughtInfo: droughtLevel(asNum(live.rain7d), asNum(live.vpd)) || UNKNOWN_INFO,
-      waterInfo: waterLevelStatus() || UNKNOWN_INFO,
+      // ✅ NEW: real water info; fallback to utils if nothing live
+      waterInfo: waterInfoFromLive() || UNKNOWN_INFO,
     };
-  }, [live]);
+  }, [live]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Stabilize per key (keeps your previous behavior)
   const [pendingBands, setPendingBands] = useState(null);
@@ -262,193 +287,263 @@ export default function Solution() {
             medium: ["Elevate power/telecom cabinets", "Pre-position barriers at outfalls", "Clear silt at key choke points"],
             high: ["Activate evacuation routes & signage", "Close underpasses/low bridges", "Open shelters; coordinate relief"],
             na: ["Integrate river/tide gauges to dashboard", "Maintain pumps & backup power", "Wayfinding for low-lying areas"],
-          }[waterInfo.level] || ["Integrate river/tide gauges to dashboard", "Maintain pumps & backup power", "Wayfinding for low-lying areas"],
+          }[waterInfo.level] || [],
       },
     };
 
     return { actions };
   }, [stableBands, rawBands]);
 
-  // ---------- PDF ----------
-  const ref = useRef(null);
-  const [exporting, setExporting] = useState(false);
+ // ---------- PDF ----------
+const ref = useRef(null);
+const [exporting, setExporting] = useState(false);
 
-  async function exportPDF() {
-    if (!ref.current) return;
-    setExporting(true);
-    try {
-      const node = ref.current;
-      const canvas = await html2canvas(node, {
-        useCORS: true,
-        scale: 2,
-        backgroundColor: "#ffffff",
-        windowWidth: node.scrollWidth,
-        windowHeight: node.scrollHeight,
-      });
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const imgHeight = (canvas.height * pageWidth) / canvas.width;
-      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, pageWidth, imgHeight);
-      pdf.save(`Green_City_Report_${parsed.name || live.city || "city"}.pdf`);
-    } finally {
-      setExporting(false);
+async function exportPDF() {
+  if (!ref.current) return;
+  setExporting(true);
+  try {
+    const root = ref.current;
+
+    // Render whole report to canvas (hi-DPI)
+    const canvas = await html2canvas(root, {
+      useCORS: true,
+      scale: 2,
+      backgroundColor: "#ffffff",
+      windowWidth: root.scrollWidth,
+      windowHeight: root.scrollHeight,
+    });
+
+    // PDF size and margins
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pageWidthMm  = pdf.internal.pageSize.getWidth();
+    const pageHeightMm = pdf.internal.pageSize.getHeight();
+    const marginMm = 8; // left/right/top/bottom
+    const contentWidthMm  = pageWidthMm  - marginMm * 2;
+    const contentHeightMm = pageHeightMm - marginMm * 2;
+
+    // px ↔ mm conversion for this canvas
+    const pxPerMm = canvas.width / contentWidthMm;
+    const pageHeightPx = Math.floor(contentHeightMm * pxPerMm);
+
+    // Build safe breakpoints so we don't cut a card mid-page
+    const containerTop = root.getBoundingClientRect().top + window.scrollY;
+    const cards = Array.from(root.querySelectorAll(".card"));
+    const breakpoints = [0];
+    for (const el of cards) {
+      const rectTop = el.getBoundingClientRect().top + window.scrollY;
+      const relTop = Math.max(0, Math.floor(rectTop - containerTop));
+      if (breakpoints[breakpoints.length - 1] !== relTop) breakpoints.push(relTop);
     }
-  }
+    breakpoints.push(canvas.height);
 
-  function backToTop() {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+    // Paginate by fitting up to the last breakpoint on each page
+    let y = 0;
+    let pageIndex = 0;
 
-  // Loading grid until we have at least some committed bands
-  const loadingGrid = (
-    <div className="grid-2" style={{ marginTop: 12 }}>
-      {[
-        "Rain", "Air Quality", "Fire", "Flood", "Heat/Temperature",
-        "Humidity & Mold", "Wind & Comfort", "Land Health", "Drought", "Water Level",
-      ].map((title) => (
-        <div className="card" key={title}>
-          <h4 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>{title}</span>
-            <Badge info={UNKNOWN_INFO} />
-          </h4>
-          <ul>
-            <li>Loading…</li><li>Loading…</li><li>Loading…</li>
-          </ul>
+    while (y < canvas.height - 1) {
+      const target = y + pageHeightPx;
+
+      // Find the greatest breakpoint in (y, target]
+      let sliceEnd = y + pageHeightPx;
+      for (let i = 1; i < breakpoints.length; i++) {
+        if (breakpoints[i] <= target && breakpoints[i] > y) {
+          sliceEnd = breakpoints[i];
+        } else if (breakpoints[i] > target) {
+          break;
+        }
+      }
+
+      const sliceHeight = Math.max(1, sliceEnd - y);
+
+      // Slice to a page-sized canvas
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = sliceHeight;
+      const ctx = pageCanvas.getContext("2d");
+      ctx.drawImage(
+        canvas,
+        0, y,
+        canvas.width, sliceHeight,
+        0, 0,
+        canvas.width, sliceHeight
+      );
+
+      // Add to PDF (scaled to content width)
+      const imgHeightMm = sliceHeight / pxPerMm;
+      if (pageIndex > 0) pdf.addPage();
+      pdf.addImage(
+        pageCanvas.toDataURL("image/jpeg", 0.92),
+        "JPEG",
+        marginMm,
+        marginMm,
+        contentWidthMm,
+        imgHeightMm
+      );
+
+      y = sliceEnd;
+      pageIndex++;
+    }
+
+    pdf.save(`Green_City_Report_${parsed.name || live.city || "city"}.pdf`);
+  } finally {
+    setExporting(false);
+  }
+}
+
+function backToTop() {
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// Loading grid until we have at least some committed bands
+const loadingGrid = (
+  <div className="grid-2" style={{ marginTop: 12 }}>
+    {[
+      "Rain", "Air Quality", "Fire", "Flood", "Heat/Temperature",
+      "Humidity & Mold", "Wind & Comfort", "Land Health", "Drought", "Water Level",
+    ].map((title) => (
+      <div className="card" key={title}>
+        <h4 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
+          <span>{title}</span>
+          <Badge info={UNKNOWN_INFO} />
+        </h4>
+        <ul>
+          <li>Loading…</li><li>Loading…</li><li>Loading…</li>
+        </ul>
+      </div>
+    ))}
+  </div>
+);
+
+return (
+  <div className="container">
+    <div className="content-wrap" style={{ justifyContent: "center" }}>
+      <div
+        className="card"
+        id="solution-root"
+        style={{ width: "100%", maxWidth: 1000, margin: "0 auto", padding: 20 }}
+        ref={ref}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+          <button
+            onClick={() => router.back()}
+            style={{ padding: "6px 12px", fontSize: 14, borderRadius: 8, marginRight: "auto" }}
+          >
+            ← Back
+          </button>
+          <div style={{ flex: 1, textAlign: "center", fontSize: 26, fontWeight: 800 }}>
+            Solution Page — {parsed.name || live.city || "—"}
+          </div>
+          <div style={{ width: 80 }} />
         </div>
-      ))}
-    </div>
-  );
 
-  return (
-    <div className="container">
-      <div className="content-wrap" style={{ justifyContent: "center" }}>
-        <div
-          className="card"
-          id="solution-root"
-          style={{ width: "100%", maxWidth: 1000, margin: "0 auto", padding: 20 }}
-          ref={ref}
-        >
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+        {/* Executive Recommendations */}
+        <div className="card" style={{ flex: "1 1 100%", textAlign: "center", marginBottom: 10 }}>
+          <h2 style={{ marginTop: 0, fontSize: 24 }}>
+            Executive Recommendations for {parsed.name || live.city}
+          </h2>
+          <p style={{ marginTop: 4, marginBottom: 8, fontSize: 15 }}>
+            Segmented, actionable recommendations per indicator (3 per category, level-aware).
+          </p>
+        </div>
+
+        {/* Map */}
+        <div className="card" style={{ flex: "1 1 100%", marginTop: 0 }}>
+          <CityMap
+            lat={parsed.lat ?? live.lat}
+            lng={parsed.lng ?? live.lng}
+            label={parsed.name || live.city}
+          />
+        </div>
+
+        {/* Segmented Actions */}
+        <div className="card" style={{ flex: "1 1 100%", marginTop: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+            <h3 style={{ margin: 0, fontSize: 22 }}>Segmented Actions</h3>
             <button
-              onClick={() => router.back()}
-              style={{ padding: "6px 12px", fontSize: 14, borderRadius: 8, marginRight: "auto" }}
+              className="primary"
+              onClick={exportPDF}
+              disabled={exporting}
+              style={{ padding: "8px 16px", borderRadius: 12, fontSize: 15 }}
             >
-              ← Back
+              {exporting ? "Exporting…" : "Export PDF"}
             </button>
-            <div style={{ flex: 1, textAlign: "center", fontSize: 26, fontWeight: 800 }}>
-              Solution Page — {parsed.name || live.city || "—"}
+          </div>
+
+          {!indexesReady ? (
+            loadingGrid
+          ) : (
+            <div className="grid-2" style={{ marginTop: 12 }}>
+              {[
+                "Rain",
+                "Air Quality",
+                "Fire",
+                "Flood",
+                "Heat/Temperature",
+                "Humidity & Mold",
+                "Wind & Comfort",
+                "Land Health",
+                "Drought",
+                "Water Level",
+              ].map((title) => {
+                const section = {
+                  "Rain": derived.actions["Rain"],
+                  "Air Quality": derived.actions["Air Quality"],
+                  "Fire": derived.actions["Fire"],
+                  "Flood": derived.actions["Flood"],
+                  "Heat/Temperature": derived.actions["Heat/Temperature"],
+                  "Humidity & Mold": derived.actions["Humidity & Mold"],
+                  "Wind & Comfort": derived.actions["Wind & Comfort"],
+                  "Land Health": derived.actions["Land Health"],
+                  "Drought": derived.actions["Drought"],
+                  "Water Level": derived.actions["Water Level"],
+                }[title];
+
+                return (
+                  <div className="card" key={title}>
+                    <h4 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
+                      <span>{title}</span>
+                      <Badge info={section.info} />
+                    </h4>
+                    <ul>
+                      {section.items.length ? (
+                        section.items.map((t, i) => <li key={i}>{t}</li>)
+                      ) : (
+                        <>
+                          <li>Loading…</li><li>Loading…</li><li>Loading…</li>
+                        </>
+                      )}
+                    </ul>
+                  </div>
+                );
+              })}
             </div>
-            <div style={{ width: 80 }} />
-          </div>
+          )}
+        </div>
 
-          {/* Executive Recommendations */}
-          <div className="card" style={{ flex: "1 1 100%", textAlign: "center", marginBottom: 10 }}>
-            <h2 style={{ marginTop: 0, fontSize: 24 }}>
-              Executive Recommendations for {parsed.name || live.city}
-            </h2>
-            <p style={{ marginTop: 4, marginBottom: 8, fontSize: 15 }}>
-              Segmented, actionable recommendations per indicator (3 per category, level-aware).
-            </p>
-          </div>
+        {/* Dashboard (forwards metrics via onData) */}
+        <IndicatorsPanel city={parsed} onData={handlePanelData} />
 
-          {/* Map */}
-          <div className="card" style={{ flex: "1 1 100%", marginTop: 0 }}>
-            <CityMap
-              lat={parsed.lat ?? live.lat}
-              lng={parsed.lng ?? live.lng}
-              label={parsed.name || live.city}
-            />
-          </div>
+        {/* Bottom buttons */}
+        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 16 }}>
+          <button onClick={() => router.push("/")} style={{ padding: "10px 16px", borderRadius: 12 }}>
+            ← Back to Home
+          </button>
+          <button onClick={backToTop} style={{ padding: "10px 16px", borderRadius: 12 }}>
+            ↑ Back to Top
+          </button>
+        </div>
 
-          {/* Segmented Actions */}
-          <div className="card" style={{ flex: "1 1 100%", marginTop: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
-              <h3 style={{ margin: 0, fontSize: 22 }}>Segmented Actions</h3>
-              <button
-                className="primary"
-                onClick={exportPDF}
-                disabled={exporting}
-                style={{ padding: "8px 16px", borderRadius: 12, fontSize: 15 }}
-              >
-                {exporting ? "Exporting…" : "Export PDF"}
-              </button>
-            </div>
-
-            {!indexesReady ? (
-              loadingGrid
-            ) : (
-              <div className="grid-2" style={{ marginTop: 12 }}>
-                {[
-                  "Rain",
-                  "Air Quality",
-                  "Fire",
-                  "Flood",
-                  "Heat/Temperature",
-                  "Humidity & Mold",
-                  "Wind & Comfort",
-                  "Land Health",
-                  "Drought",
-                  "Water Level",
-                ].map((title) => {
-                  const section = {
-                    "Rain": derived.actions["Rain"],
-                    "Air Quality": derived.actions["Air Quality"],
-                    "Fire": derived.actions["Fire"],
-                    "Flood": derived.actions["Flood"],
-                    "Heat/Temperature": derived.actions["Heat/Temperature"],
-                    "Humidity & Mold": derived.actions["Humidity & Mold"],
-                    "Wind & Comfort": derived.actions["Wind & Comfort"],
-                    "Land Health": derived.actions["Land Health"],
-                    "Drought": derived.actions["Drought"],
-                    "Water Level": derived.actions["Water Level"],
-                  }[title];
-
-                  return (
-                    <div className="card" key={title}>
-                      <h4 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 8 }}>
-                        <span>{title}</span>
-                        <Badge info={section.info} />
-                      </h4>
-                      <ul>
-                        {section.items.length ? (
-                          section.items.map((t, i) => <li key={i}>{t}</li>)
-                        ) : (
-                          <>
-                            <li>Loading…</li><li>Loading…</li><li>Loading…</li>
-                          </>
-                        )}
-                      </ul>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Dashboard (forwards metrics via onData) */}
-          <IndicatorsPanel city={parsed} onData={handlePanelData} />
-
-          {/* Bottom buttons */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 16 }}>
-            <button onClick={() => router.push("/")} style={{ padding: "10px 16px", borderRadius: 12 }}>
-              ← Back to Home
-            </button>
-            <button onClick={backToTop} style={{ padding: "10px 16px", borderRadius: 12 }}>
-              ↑ Back to Top
-            </button>
-          </div>
-
-          {/* Legend */}
-          <div style={{ marginTop: 12, textAlign: "center", fontSize: 12, color: "#4b5563" }}>
-            Legend:&nbsp;
-            <span style={{ color: COLORS.low }}>Low</span> ·&nbsp;
-            <span style={{ color: COLORS.medium }}>Medium</span> ·&nbsp;
-            <span style={{ color: COLORS.high }}>High</span> ·&nbsp;
-            <span style={{ color: "#6b7280" }}>NA</span>
-          </div>
+        {/* Legend */}
+        <div style={{ marginTop: 12, textAlign: "center", fontSize: 12, color: "#4b5563" }}>
+          Legend:&nbsp;
+          <span style={{ color: COLORS.low }}>Low</span> ·&nbsp;
+          <span style={{ color: COLORS.medium }}>Medium</span> ·&nbsp;
+          <span style={{ color: COLORS.high }}>High</span> ·&nbsp;
+          <span style={{ color: "#6b7280" }}>NA</span>
         </div>
       </div>
     </div>
-  );
+  </div>
+);
 }
