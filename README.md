@@ -1,27 +1,55 @@
-# Green City Planner & Healthy Settlements
+Green City Planner & Healthy Settlements
+A Smart Dashboard for Sustainable Urban Planning
 
-A lightweight Next.js app to analyze a city's environmental indicators and export a PDF of findings.
+Developed by Team CodexGalaxy for the NASA Space Apps Challenge 2025 🚀
 
-## Setup
+🔗 Live Demo: https://green-city-planner.vercel.app/
 
-1. Install dependencies
-   ```bash
-   npm i
-   ```
+🛰️ Overview
 
-2. Create `.env.local` in the project root with:
-   ```bash
-   NEXT_PUBLIC_NASA_API_KEY=YOUR_NASA_API_KEY
-   NEXT_PUBLIC_GEONAMES_USERNAME=YOUR_GEONAMES_USERNAME
-   ```
+Green City Planner is an interactive web platform that transforms NASA Earth observation data into actionable insights for sustainable urban growth.
+It helps cities become healthier, more resilient, and future-ready by analyzing real-time environmental indicators such as air quality, temperature, rainfall, flood and fire risks, and more.
 
-3. Run
-   ```bash
-   npm run dev
-   ```
+Users can simply select a city to explore a live data dashboard and receive automatically generated recommendations to improve urban health and sustainability — powered by NASA Earth Science data and open datasets.
 
-## Notes
-- NASA API used: `https://api.nasa.gov/planetary/earth/imagery` for recent satellite snapshot.
-- Weather & Air Quality: Open-Meteo (no key) and OpenAQ (no key) as public sources.
-- Fire: NASA EONET open wildfires feed filtered near the selected city.
-- PDF Export: Uses html2canvas + jsPDF; exports the visible dashboard (map + metrics + recommendations).
+
+💡 Features
+
+🌦 Real-time City Dashboard — View environmental indicators like air quality, rainfall, and temperature
+
+🧭 Data-Driven Solutions — City-specific recommendations generated dynamically
+
+🗺 Interactive Maps — Explore spatial risks and environmental trends
+
+🧾 PDF Export — Download professional reports instantly
+
+🛰 Powered by NASA Earth Science Data — Reliable, open, and globally accessible
+
+🛠️ Tech Stack
+
+Next.js (React Framework)
+
+Leaflet.js — Interactive mapping
+
+Day.js, jsPDF, html2canvas — Data processing & PDF generation
+
+NASA Earthdata + OpenStreetMap APIs
+
+
+🚀 Live Deployment
+
+🌐 Visit the live version here:
+👉 https://green-city-planner.vercel.app/
+
+You can also clone and run it locally:
+
+git clone https://github.com/your-username/green-city-planner.git
+cd green-city-planner
+npm install
+npm run dev
+
+
+🤝 Team CodexGalaxy
+
+Built with passion and purpose by Team CodexGalaxy for the NASA Space Apps Challenge 2025.
+Our mission: Turning data into action for the cities of tomorrow. 🌱
